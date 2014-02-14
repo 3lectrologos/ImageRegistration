@@ -23,7 +23,6 @@ import org.opencv.core.MatOfPoint;
 import org.opencv.core.MatOfPoint2f;
 import org.opencv.core.Point;
 import org.opencv.core.Scalar;
-import org.opencv.core.Size;
 import org.opencv.features2d.DMatch;
 import org.opencv.features2d.DescriptorExtractor;
 import org.opencv.features2d.DescriptorMatcher;
@@ -94,7 +93,7 @@ public class CameraActivity extends ActionBarActivity implements
   private static final boolean DETECTOR_EXTRA_OPT = false;
   
   private void initDetector() {
-    mDetector = FeatureDetector.create(FeatureDetector.STAR);
+    mDetector = FeatureDetector.create(FeatureDetector.PYRAMID_STAR);
     if(DETECTOR_EXTRA_OPT) {
       try {
         File outDir = getCacheDir();
@@ -118,7 +117,7 @@ public class CameraActivity extends ActionBarActivity implements
   
   private Bitmap getBitmap() {
     if(mBitmap == null) {
-      String filename = "office.jpg";
+      String filename = "dominos.jpg";
       mBitmap = XUtil.getBitmapFromAsset(this, filename);
     }
     return mBitmap;
@@ -169,7 +168,7 @@ public class CameraActivity extends ActionBarActivity implements
         List<KeyPoint> targetKeypointsList = mTargetKeypoints.toList();
         mGoodSrcPointsList = new ArrayList<Point>();
         mGoodTargetPointsList = new ArrayList<Point>();
-        if(minDist > 50) {
+        if(minDist > 150) {
           matchFailed("min. distance too high [" + minDist + "]");
           return;
         }
@@ -197,8 +196,9 @@ public class CameraActivity extends ActionBarActivity implements
           matchFailed("not enough matches [" + mGoodSrcPointsList.size() + "]");
           return;
         }
+        Mat inlierMask = new Mat();
         Mat hom = Calib3d.findHomography(
-            goodSrcPoints, goodTargetPoints, Calib3d.RANSAC, 5);
+            goodSrcPoints, goodTargetPoints, Calib3d.RANSAC, 5, inlierMask);
         
         Core.perspectiveTransform(mSrcCorners, mTransformedCorners, hom);
         MatOfPoint pointCorners = new MatOfPoint();
@@ -208,15 +208,9 @@ public class CameraActivity extends ActionBarActivity implements
         //  return;
         //}
         
-        MatOfPoint2f transformedPoints = new MatOfPoint2f();
-        Core.perspectiveTransform(goodSrcPoints, transformedPoints, hom);
-        List<Point> transformedPointsList = transformedPoints.toList();
         List<DMatch> toRemove = new ArrayList<DMatch>();
-        for(int i = 0; i < mGoodMatchesList.size(); i++) {
-          DMatch match = mGoodMatchesList.get(i);
-          Point p1 = transformedPointsList.get(match.trainIdx);
-          Point p2 = mGoodTargetPointsList.get(match.queryIdx);
-          if(dist2(p1, p2) > 5) {
+        for(DMatch match : mGoodMatchesList) {
+          if(Math.round(inlierMask.get(match.queryIdx, 0)[0]) == 0) {
             toRemove.add(match);
           }
         }
@@ -248,12 +242,6 @@ public class CameraActivity extends ActionBarActivity implements
                    "Matching unsuccessful" + reason,
                    Toast.LENGTH_SHORT)
          .show();
-  }
-  
-  private double dist2(Point p1, Point p2) {
-    double x = p1.x - p2.x;
-    double y = p1.y - p2.y;
-    return Math.sqrt(x*x + y*y);
   }
 
   @Override
@@ -305,7 +293,7 @@ public class CameraActivity extends ActionBarActivity implements
   }
   
   private void preprocess(Mat src, Mat dst) {
-    Imgproc.medianBlur(src, dst, 5);
+    Imgproc.medianBlur(src, dst, 3);
     //Imgproc.GaussianBlur(src, dst, new Size(9, 9), 2);
   }
 
