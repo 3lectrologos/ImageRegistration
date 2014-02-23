@@ -51,10 +51,12 @@ public class CameraActivity extends ActionBarActivity implements
   private DescriptorExtractor mDescriptor;
   private DescriptorMatcher mMatcher;
   private MatOfKeyPoint mSrcKeypoints;
-  private List<Point> mGoodSrcPointsList;
-  private List<Point> mGoodTargetPointsList;
-  private Mat mSrcDescriptors;
   private MatOfKeyPoint mTargetKeypoints;
+  private List<KeyPoint> mSrcKeypointList;
+  private List<KeyPoint> mTargetKeypointList;
+  private List<Point> mGoodSrcKeypointList;
+  private List<Point> mGoodTargetKeypointList;
+  private Mat mSrcDescriptors;
   private List<DMatch> mGoodMatchesList;
   private boolean mProcessingTargetMat = false;
   private boolean mValidMatches = false;
@@ -70,18 +72,18 @@ public class CameraActivity extends ActionBarActivity implements
         case LoaderCallbackInterface.SUCCESS:
           mOpenCvCameraView.enableView();
           initDetector();
-          mDescriptor = DescriptorExtractor.create(DescriptorExtractor.FREAK);
+          mDescriptor = DescriptorExtractor.create(DescriptorExtractor.ORB);
           mMatcher = DescriptorMatcher.create(
               DescriptorMatcher.BRUTEFORCE_HAMMING);
           Mat srcMat = new Mat();
           Utils.bitmapToMat(getBitmap(), srcMat);
           Imgproc.cvtColor(srcMat, srcMat, Imgproc.COLOR_RGB2GRAY);
           preprocess(srcMat, srcMat);
-          Log.i(TAG, "srcMat type = " + srcMat.type());
           mSrcDescriptors = new Mat();
           mSrcKeypoints = new MatOfKeyPoint();
           mDetector.detect(srcMat, mSrcKeypoints);
           mDescriptor.compute(srcMat, mSrcKeypoints, mSrcDescriptors);
+          mSrcKeypointList = mSrcKeypoints.toList();
           break;
         default:
           super.onManagerConnected(status);
@@ -90,16 +92,16 @@ public class CameraActivity extends ActionBarActivity implements
     }
   };
   
-  private static final boolean DETECTOR_EXTRA_OPT = false;
+  private static final boolean DETECTOR_EXTRA_OPT = true;
   
   private void initDetector() {
-    mDetector = FeatureDetector.create(FeatureDetector.PYRAMID_STAR);
+    mDetector = FeatureDetector.create(FeatureDetector.ORB);
     if(DETECTOR_EXTRA_OPT) {
       try {
         File outDir = getCacheDir();
-        File outFile = File.createTempFile("detectorParams", ".yaml", outDir);
+        File outFile = File.createTempFile("detectorParams", ".YAML", outDir);
         String str = "%YAML:1.0\n" +
-        		"responseThreshold: 30\n";
+        		"nFeatures: 10000\n";
         OutputStreamWriter writer =
             new OutputStreamWriter(new FileOutputStream(outFile));
         writer.write(str);
@@ -141,65 +143,50 @@ public class CameraActivity extends ActionBarActivity implements
       public void onClick(View v) {
         mProcessingTargetMat = true;
       	mValidMatches = false;
+      	
+      	// Extract keypoints from camera preview
         Mat targetDescriptors = new Mat();
         mTargetKeypoints = new MatOfKeyPoint();
         mDetector.detect(mTargetMat, mTargetKeypoints);
         mDescriptor.compute(mTargetMat, mTargetKeypoints, targetDescriptors);
+        mTargetKeypointList = mTargetKeypoints.toList();
         mProcessingTargetMat = false;
-        MatOfDMatch matches = new MatOfDMatch();
-        
+        // Abort if no keypoints found
         if(targetDescriptors.empty()) {
           matchFailed("not enough keypoints");
           return;
         }
-        mMatcher.match(targetDescriptors, mSrcDescriptors, matches);
-        List<DMatch> matchesList = matches.toList();
-        
-        float maxDist = 0;
-        float minDist = Float.MAX_VALUE;
-        for(int i = 0; i < matchesList.size(); i++) {
-          float dist = matchesList.get(i).distance;
-          if(dist < minDist) minDist = dist;
-          if(dist > maxDist) maxDist = dist;
-        }
-
+        // Compute matches
+        List<MatOfDMatch> matches = new ArrayList<MatOfDMatch>();
+        mMatcher.knnMatch(targetDescriptors, mSrcDescriptors, matches, 2);
+        // Filter matches to keep only "unambiguous" ones
         mGoodMatchesList = new ArrayList<DMatch>();
-        List<KeyPoint> srcKeypointsList = mSrcKeypoints.toList();
-        List<KeyPoint> targetKeypointsList = mTargetKeypoints.toList();
-        mGoodSrcPointsList = new ArrayList<Point>();
-        mGoodTargetPointsList = new ArrayList<Point>();
-        if(minDist > 150) {
-          matchFailed("min. distance too high [" + minDist + "]");
-          return;
+        mGoodSrcKeypointList = new ArrayList<Point>();
+        mGoodTargetKeypointList = new ArrayList<Point>();
+        for(MatOfDMatch match : matches) {
+        	List<DMatch> dmlist = match.toList();
+        	DMatch dm0 = dmlist.get(0);
+        	DMatch dm1 = dmlist.get(1);
+        	if(dm0.distance < 0.7 * dm1.distance) {
+        		mGoodMatchesList.add(dm0);
+        		mGoodSrcKeypointList.add(mSrcKeypointList.get(dm0.trainIdx).pt);
+        		mGoodTargetKeypointList.add(
+        				mTargetKeypointList.get(dm0.queryIdx).pt);
+        	}
         }
-        float goodDist = 3*minDist;
-        for(int i = 0; i < matchesList.size(); i++) {
-          DMatch match = matchesList.get(i);
-          if(match.distance < goodDist) {
-          	mGoodMatchesList.add(match);
-          	mGoodSrcPointsList.add(srcKeypointsList.get(match.trainIdx).pt);
-            match.trainIdx = mGoodSrcPointsList.size() - 1;
-            mGoodTargetPointsList.add(
-                targetKeypointsList.get(match.queryIdx).pt);
-            match.queryIdx =  mGoodTargetPointsList.size() - 1;
-          }
-        }
-        
-        Log.i(TAG, "Good matches = " + mGoodMatchesList.size() +
-                   "out of " + matchesList.size());
-        
+        // Compute homography
         MatOfPoint2f goodSrcPoints = new MatOfPoint2f();
-        goodSrcPoints.fromList(mGoodSrcPointsList);
+        goodSrcPoints.fromList(mGoodSrcKeypointList);
         MatOfPoint2f goodTargetPoints = new MatOfPoint2f();
-        goodTargetPoints.fromList(mGoodTargetPointsList);
-        if(mGoodSrcPointsList.size() < 8) {
-          matchFailed("not enough matches [" + mGoodSrcPointsList.size() + "]");
+        goodTargetPoints.fromList(mGoodTargetKeypointList);
+        if(mGoodSrcKeypointList.size() < 8) {
+          matchFailed("not enough matches [" + mGoodSrcKeypointList.size() + "]");
           return;
         }
         Mat inlierMask = new Mat();
         Mat hom = Calib3d.findHomography(
-            goodSrcPoints, goodTargetPoints, Calib3d.RANSAC, 5, inlierMask);
-        
+            goodSrcPoints, goodTargetPoints, Calib3d.RANSAC, 6.0, inlierMask);
+        // Transform base frame rectangle
         Core.perspectiveTransform(mSrcCorners, mTransformedCorners, hom);
         MatOfPoint pointCorners = new MatOfPoint();
         mTransformedCorners.convertTo(pointCorners, CvType.CV_32S);
@@ -207,10 +194,11 @@ public class CameraActivity extends ActionBarActivity implements
         //  matchFailed("non-convex bounding box");
         //  return;
         //}
-        
+        // Remove outlier matches according to homography
         List<DMatch> toRemove = new ArrayList<DMatch>();
-        for(DMatch match : mGoodMatchesList) {
-          if(Math.round(inlierMask.get(match.queryIdx, 0)[0]) == 0) {
+        for(int i = 0; i < mGoodMatchesList.size(); i++) {
+        	DMatch match = mGoodMatchesList.get(i);
+          if(Math.round(inlierMask.get(i, 0)[0]) == 0) {
             toRemove.add(match);
           }
         }
@@ -293,11 +281,11 @@ public class CameraActivity extends ActionBarActivity implements
   }
   
   private void preprocess(Mat src, Mat dst) {
-    Imgproc.medianBlur(src, dst, 3);
+    //Imgproc.medianBlur(src, dst, 3);
     //Imgproc.GaussianBlur(src, dst, new Size(9, 9), 2);
   }
 
-  private static final boolean SHOW_KP = false;
+  private static final boolean SHOW_KP = true;
   
   public Mat onCameraFrame(CvCameraViewFrame inputFrame) {
     if(!mProcessingTargetMat) {
@@ -322,8 +310,9 @@ public class CameraActivity extends ActionBarActivity implements
     if(mValidMatches) {
       if(mGoodMatchesList != null) {
 	      for(DMatch dm : mGoodMatchesList) {
-	      	Point sp = transform(mGoodSrcPointsList.get(dm.trainIdx));
-	      	Point tp = mGoodTargetPointsList.get(dm.queryIdx);
+	      	
+	      	Point sp = transform(mSrcKeypointList.get(dm.trainIdx).pt);
+	      	Point tp = mTargetKeypointList.get(dm.queryIdx).pt;
 	      	Core.circle(targetRgb, sp, 15, new Scalar(0, 255, 0));
 	      	Core.circle(targetRgb, tp, 15, new Scalar(0, 255, 0));
 	      	Core.line(targetRgb, sp, tp, new Scalar(0, 255, 0));
