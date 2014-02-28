@@ -23,15 +23,18 @@ import org.opencv.core.MatOfPoint;
 import org.opencv.core.MatOfPoint2f;
 import org.opencv.core.Point;
 import org.opencv.core.Scalar;
+import org.opencv.core.Size;
 import org.opencv.features2d.DMatch;
 import org.opencv.features2d.DescriptorExtractor;
 import org.opencv.features2d.DescriptorMatcher;
 import org.opencv.features2d.FeatureDetector;
 import org.opencv.features2d.KeyPoint;
+import org.opencv.highgui.Highgui;
 import org.opencv.imgproc.Imgproc;
 
 import android.graphics.Bitmap;
 import android.os.Bundle;
+import android.os.Environment;
 import android.support.v7.app.ActionBarActivity;
 import android.util.Log;
 import android.view.View;
@@ -101,7 +104,7 @@ public class CameraActivity extends ActionBarActivity implements
         File outDir = getCacheDir();
         File outFile = File.createTempFile("detectorParams", ".YAML", outDir);
         String str = "%YAML:1.0\n" +
-        		"nFeatures: 10000\n";
+        		"nFeatures: 50000\n";
         OutputStreamWriter writer =
             new OutputStreamWriter(new FileOutputStream(outFile));
         writer.write(str);
@@ -119,10 +122,18 @@ public class CameraActivity extends ActionBarActivity implements
   
   private Bitmap getBitmap() {
     if(mBitmap == null) {
-      String filename = "dominos.jpg";
+      String filename = "back.jpg";
       mBitmap = XUtil.getBitmapFromAsset(this, filename);
     }
     return mBitmap;
+  }
+  
+  private Mat getBitmap2() {
+    String filename = "test.jpg";
+    Bitmap bitmap = XUtil.getBitmapFromAsset(this, filename);
+    Mat targetMat = new Mat();
+    Utils.bitmapToMat(bitmap, targetMat);
+    return targetMat;
   }
   
   @Override
@@ -145,11 +156,14 @@ public class CameraActivity extends ActionBarActivity implements
       	mValidMatches = false;
       	
       	// Extract keypoints from camera preview
+      	//mTargetMat = getBitmap2();
+      	saveMatAsImage(mTargetMat, "test.jpg");
         Mat targetDescriptors = new Mat();
         mTargetKeypoints = new MatOfKeyPoint();
         mDetector.detect(mTargetMat, mTargetKeypoints);
         mDescriptor.compute(mTargetMat, mTargetKeypoints, targetDescriptors);
         mTargetKeypointList = mTargetKeypoints.toList();
+        Log.i("foo", "keypoints = " + mSrcKeypointList.size() + " -- " + mTargetKeypointList.size());
         mProcessingTargetMat = false;
         // Abort if no keypoints found
         if(targetDescriptors.empty()) {
@@ -174,6 +188,7 @@ public class CameraActivity extends ActionBarActivity implements
         				mTargetKeypointList.get(dm0.queryIdx).pt);
         	}
         }
+        Log.i("foo", "Good: " + mGoodMatchesList.size() + " of " + matches.size());
         // Compute homography
         MatOfPoint2f goodSrcPoints = new MatOfPoint2f();
         goodSrcPoints.fromList(mGoodSrcKeypointList);
@@ -202,7 +217,9 @@ public class CameraActivity extends ActionBarActivity implements
             toRemove.add(match);
           }
         }
+        int foo = mGoodMatchesList.size();
         mGoodMatchesList.removeAll(toRemove);
+        Log.i("foo", "Homography: " + mGoodMatchesList.size() + " out of " + foo);
         if(mGoodMatchesList.size() < 11) {
           matchFailed("not enough good matches [" +
                       mGoodMatchesList.size() + "]");
@@ -218,6 +235,13 @@ public class CameraActivity extends ActionBarActivity implements
             Toast.LENGTH_LONG).show();
       }
     });
+  }
+  
+  private void saveMatAsImage(Mat mat, String filename) {
+    File dir = Environment.getExternalStoragePublicDirectory(
+        Environment.DIRECTORY_PICTURES);
+    File file = new File(dir, filename); 
+    Highgui.imwrite(file.toString(), mat);
   }
   
   private void matchFailed(String reason) {
@@ -274,18 +298,19 @@ public class CameraActivity extends ActionBarActivity implements
   public void onCameraViewStopped() {
   }
   
-  private Point transform(Point pt) {
-    double ratio = mResolution.height/(1.0*getBitmap().getHeight());
-    double xoffset = 0.5*(mResolution.width - getBitmap().getWidth()*ratio);
+  private Point transform(Point pt, int width, int height) {
+    double ratio = mResolution.height/(1.0*height);
+    double xoffset = 0.5*(mResolution.width - width*ratio);
     return new Point(xoffset + ratio*pt.x, ratio*pt.y);
   }
   
   private void preprocess(Mat src, Mat dst) {
+    Imgproc.resize(src, dst, new Size(1280, 720));
     //Imgproc.medianBlur(src, dst, 3);
     //Imgproc.GaussianBlur(src, dst, new Size(9, 9), 2);
   }
 
-  private static final boolean SHOW_KP = true;
+  private static final boolean SHOW_KP = false;
   
   public Mat onCameraFrame(CvCameraViewFrame inputFrame) {
     if(!mProcessingTargetMat) {
@@ -298,11 +323,19 @@ public class CameraActivity extends ActionBarActivity implements
       mDetector.detect(mTargetMat, targetKeypoints);
       if(targetKeypoints != null) {
         for(KeyPoint kp : targetKeypoints.toList()) {
-          Core.circle(targetRgb, new Point(kp.pt.x, kp.pt.y), 10,
+          Point tp = transform(new Point(kp.pt.x, kp.pt.y), 1280, 720);
+          Core.circle(targetRgb,
+                      tp,
+                      10,
                       new Scalar(255, 0, 0));
         }
         for(KeyPoint kp : mSrcKeypoints.toList()) {
-          Core.circle(targetRgb, transform(new Point(kp.pt.x, kp.pt.y)), 10,
+          Point sp = transform(new Point(kp.pt.x, kp.pt.y),
+                               getBitmap().getWidth(),
+                               getBitmap().getHeight());
+          Core.circle(targetRgb,
+                      sp,
+                      10,
                       new Scalar(0, 100, 255));
         }
       }
@@ -310,28 +343,31 @@ public class CameraActivity extends ActionBarActivity implements
     if(mValidMatches) {
       if(mGoodMatchesList != null) {
 	      for(DMatch dm : mGoodMatchesList) {
-	      	
-	      	Point sp = transform(mSrcKeypointList.get(dm.trainIdx).pt);
-	      	Point tp = mTargetKeypointList.get(dm.queryIdx).pt;
+	      	Point sp = transform(mSrcKeypointList.get(dm.trainIdx).pt,
+	      	                     getBitmap().getWidth(),
+	      	                     getBitmap().getHeight());
+	      	Point tp = transform(mTargetKeypointList.get(dm.queryIdx).pt,
+	      	                     1280,
+	      	                     720);
 	      	Core.circle(targetRgb, sp, 15, new Scalar(0, 255, 0));
 	      	Core.circle(targetRgb, tp, 15, new Scalar(0, 255, 0));
 	      	Core.line(targetRgb, sp, tp, new Scalar(0, 255, 0));
 	      }
 	      Core.line(targetRgb,
-	          new Point(mTransformedCorners.get(0, 0)),
-	          new Point(mTransformedCorners.get(1, 0)),
+	          transform(new Point(mTransformedCorners.get(0, 0)), 1280, 720),
+	          transform(new Point(mTransformedCorners.get(1, 0)), 1280, 720),
 	          new Scalar(155, 155, 0), 3);
         Core.line(targetRgb,
-            new Point(mTransformedCorners.get(1, 0)),
-            new Point(mTransformedCorners.get(2, 0)),
+            transform(new Point(mTransformedCorners.get(1, 0)), 1280, 720),
+            transform(new Point(mTransformedCorners.get(2, 0)), 1280, 720),
             new Scalar(155, 155, 0), 3);
         Core.line(targetRgb,
-            new Point(mTransformedCorners.get(2, 0)),
-            new Point(mTransformedCorners.get(3, 0)),
+            transform(new Point(mTransformedCorners.get(2, 0)), 1280, 720),
+            transform(new Point(mTransformedCorners.get(3, 0)), 1280, 720),
             new Scalar(155, 155, 0), 3);
         Core.line(targetRgb,
-            new Point(mTransformedCorners.get(3, 0)),
-            new Point(mTransformedCorners.get(0, 0)),
+            transform(new Point(mTransformedCorners.get(3, 0)), 1280, 720),
+            transform(new Point(mTransformedCorners.get(0, 0)), 1280, 720),
             new Scalar(155, 155, 0), 3);
       }
     }

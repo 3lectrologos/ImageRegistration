@@ -15,4 +15,8 @@ public class CustomCameraView extends JavaCameraView {
   public Size getResolution() {
     return mCamera.getParameters().getPreviewSize();
   }
+  
+//  protected boolean initializeCamera(int width, int height) {
+//    return super.initializeCamera(1280, 720);
+//  }
 }
