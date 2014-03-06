@@ -81,7 +81,7 @@ public class CameraActivity extends ActionBarActivity implements
           Mat srcMat = new Mat();
           Utils.bitmapToMat(getBitmap(), srcMat);
           Imgproc.cvtColor(srcMat, srcMat, Imgproc.COLOR_RGB2GRAY);
-          preprocess(srcMat, srcMat);
+          preprocessSrc(srcMat, srcMat);
           mSrcDescriptors = new Mat();
           mSrcKeypoints = new MatOfKeyPoint();
           mDetector.detect(srcMat, mSrcKeypoints);
@@ -104,7 +104,7 @@ public class CameraActivity extends ActionBarActivity implements
         File outDir = getCacheDir();
         File outFile = File.createTempFile("detectorParams", ".YAML", outDir);
         String str = "%YAML:1.0\n" +
-        		"nFeatures: 50000\n";
+        		"nFeatures: 50000\nWTA_K: 3";
         OutputStreamWriter writer =
             new OutputStreamWriter(new FileOutputStream(outFile));
         writer.write(str);
@@ -122,14 +122,14 @@ public class CameraActivity extends ActionBarActivity implements
   
   private Bitmap getBitmap() {
     if(mBitmap == null) {
-      String filename = "back.jpg";
+      String filename = "back_rain.jpg";
       mBitmap = XUtil.getBitmapFromAsset(this, filename);
     }
     return mBitmap;
   }
   
   private Mat getBitmap2() {
-    String filename = "test.jpg";
+    String filename = "back.jpg";
     Bitmap bitmap = XUtil.getBitmapFromAsset(this, filename);
     Mat targetMat = new Mat();
     Utils.bitmapToMat(bitmap, targetMat);
@@ -156,8 +156,8 @@ public class CameraActivity extends ActionBarActivity implements
       	mValidMatches = false;
       	
       	// Extract keypoints from camera preview
-      	//mTargetMat = getBitmap2();
-      	saveMatAsImage(mTargetMat, "test.jpg");
+      	mTargetMat = getBitmap2();
+      	//saveMatAsImage(mTargetMat, "test.jpg");
         Mat targetDescriptors = new Mat();
         mTargetKeypoints = new MatOfKeyPoint();
         mDetector.detect(mTargetMat, mTargetKeypoints);
@@ -267,7 +267,7 @@ public class CameraActivity extends ActionBarActivity implements
   @Override
   public void onResume() {
     super.onResume();
-    OpenCVLoader.initAsync(OpenCVLoader.OPENCV_VERSION_2_4_3,
+    OpenCVLoader.initAsync(OpenCVLoader.OPENCV_VERSION_2_4_7,
                            this,
                            mLoaderCallback);
   }
@@ -304,8 +304,16 @@ public class CameraActivity extends ActionBarActivity implements
     return new Point(xoffset + ratio*pt.x, ratio*pt.y);
   }
   
-  private void preprocess(Mat src, Mat dst) {
+  private void preprocessSrc(Mat src, Mat dst) {
+    preprocessCommon(src, dst);
+  }
+  
+  private void preprocessTarget(Mat src, Mat dst) {
     Imgproc.resize(src, dst, new Size(1280, 720));
+    preprocessCommon(src, dst);
+  }
+  
+  private void preprocessCommon(Mat src, Mat dst) {
     //Imgproc.medianBlur(src, dst, 3);
     //Imgproc.GaussianBlur(src, dst, new Size(9, 9), 2);
   }
@@ -315,7 +323,7 @@ public class CameraActivity extends ActionBarActivity implements
   public Mat onCameraFrame(CvCameraViewFrame inputFrame) {
     if(!mProcessingTargetMat) {
       mTargetMat = inputFrame.gray();
-      preprocess(mTargetMat, mTargetMat);
+      preprocessTarget(mTargetMat, mTargetMat);
     }
     Mat targetRgb = inputFrame.rgba();
     if(SHOW_KP) {
